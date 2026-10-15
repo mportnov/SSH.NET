@@ -205,5 +205,71 @@ namespace Renci.SshNet.IntegrationTests
             Assert.IsNotNull(attributes);
             Assert.IsTrue(attributes.IsRegularFile);
         }
+
+        [TestMethod]
+        public void Get_and_delete_symbolic_link_do_not_follow_the_link()
+        {
+            const string testDirectory = "/home/sshnet/sshnet-symlink-test";
+            const string targetPath = testDirectory + "/target.txt";
+            const string linkPath = testDirectory + "/link.txt";
+
+            using var sshClient = new SshClient(SshServerHostName, SshServerPort, User.UserName, User.Password);
+            sshClient.Connect();
+            sshClient.RunCommand($"rm -rf {testDirectory} && mkdir -p {testDirectory} && echo content > {targetPath} && ln -s {targetPath} {linkPath}");
+
+            try
+            {
+                var link = _sftpClient.Get(linkPath);
+                Assert.IsTrue(link.IsSymbolicLink);
+                Assert.AreEqual(linkPath, link.FullName);
+
+                _sftpClient.DeleteFile(linkPath);
+
+                Assert.IsFalse(_sftpClient.Exists(linkPath));
+                Assert.IsTrue(_sftpClient.Exists(targetPath));
+                Assert.IsTrue(_sftpClient.Get(targetPath).IsRegularFile);
+            }
+            finally
+            {
+                sshClient.RunCommand($"rm -rf {testDirectory}");
+            }
+        }
+
+        [TestMethod]
+        public async Task Get_and_delete_symbolic_link_do_not_follow_the_link_async()
+        {
+            const string testDirectory = "/home/sshnet/sshnet-symlink-test-async";
+            const string targetPath = testDirectory + "/target.txt";
+            const string linkPath = testDirectory + "/link.txt";
+
+            using var sshClient = new SshClient(SshServerHostName, SshServerPort, User.UserName, User.Password);
+            await sshClient.ConnectAsync(CancellationToken.None).ConfigureAwait(false);
+            sshClient.RunCommand($"rm -rf {testDirectory} && mkdir -p {testDirectory} && echo content > {targetPath} && ln -s {targetPath} {linkPath}");
+
+            try
+            {
+                var link = await _sftpClient.GetAsync(linkPath, CancellationToken.None).ConfigureAwait(false);
+                Assert.IsTrue(link.IsSymbolicLink);
+                Assert.AreEqual(linkPath, link.FullName);
+
+                await _sftpClient.DeleteFileAsync(linkPath, CancellationToken.None).ConfigureAwait(false);
+
+                Assert.IsFalse(await _sftpClient.ExistsAsync(linkPath).ConfigureAwait(false));
+                Assert.IsTrue(await _sftpClient.ExistsAsync(targetPath).ConfigureAwait(false));
+            }
+            finally
+            {
+                sshClient.RunCommand($"rm -rf {testDirectory}");
+            }
+        }
+
+        [TestMethod]
+        public void Canonical_path_of_dot_dot_and_trailing_slash_is_resolved()
+        {
+            _sftpClient.ChangeDirectory("/home/sshnet");
+
+            Assert.AreEqual("/home", _sftpClient.Get("..").FullName);
+            Assert.AreEqual("/home/sshnet", _sftpClient.Get("/home/sshnet/").FullName);
+        }
     }
 }

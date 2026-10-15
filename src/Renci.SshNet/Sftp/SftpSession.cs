@@ -102,123 +102,93 @@ namespace Renci.SshNet.Sftp
         /// <inheritdoc/>
         public string GetCanonicalPath(string path)
         {
+            ArgumentNullException.ThrowIfNull(path);
+
             var fullPath = GetFullRemotePath(path);
 
-            var canonizedPath = string.Empty;
-
-            var realPathFiles = RequestRealPath(fullPath, nullOnError: true);
-
-            if (realPathFiles != null)
+            if (!TrySplitLastComponent(fullPath, out var parentPath, out var name))
             {
-                canonizedPath = realPathFiles[0].Key;
+                var realPathFiles = RequestRealPath(fullPath, nullOnError: true);
+                return CanonicalOrDefault(realPathFiles, fullPath);
             }
 
-            if (!string.IsNullOrEmpty(canonizedPath))
-            {
-                return canonizedPath;
-            }
-
-            // Check for special cases
-            if (fullPath.EndsWith("/.", StringComparison.OrdinalIgnoreCase) ||
-                fullPath.EndsWith("/..", StringComparison.OrdinalIgnoreCase) ||
-                fullPath.Equals("/", StringComparison.OrdinalIgnoreCase) ||
-                fullPath.IndexOf('/', StringComparison.OrdinalIgnoreCase) < 0)
-            {
-                return fullPath;
-            }
-
-            var pathParts = fullPath.Split('/');
-
-            var partialFullPath = string.Join('/', pathParts, 0, pathParts.Length - 1);
-
-            if (string.IsNullOrEmpty(partialFullPath))
-            {
-                partialFullPath = "/";
-            }
-
-            realPathFiles = RequestRealPath(partialFullPath, nullOnError: true);
-
-            if (realPathFiles != null)
-            {
-                canonizedPath = realPathFiles[0].Key;
-            }
-
-            if (string.IsNullOrEmpty(canonizedPath))
-            {
-                return fullPath;
-            }
-
-            var slash = string.Empty;
-            if (canonizedPath[canonizedPath.Length - 1] != '/')
-            {
-                slash = "/";
-            }
-
-            return string.Format(CultureInfo.InvariantCulture, "{0}{1}{2}", canonizedPath, slash, pathParts[pathParts.Length - 1]);
+            var parentRealPathFiles = RequestRealPath(parentPath, nullOnError: true);
+            return Combine(parentRealPathFiles, fullPath, name);
         }
 
         /// <inheritdoc/>
         public async Task<string> GetCanonicalPathAsync(string path, CancellationToken cancellationToken)
         {
+            ArgumentNullException.ThrowIfNull(path);
+
             var fullPath = GetFullRemotePath(path);
 
-            var canonizedPath = string.Empty;
-            var realPathFiles = await RequestRealPathAsync(fullPath, nullOnError: true, cancellationToken).ConfigureAwait(false);
-            if (realPathFiles != null)
+            if (!TrySplitLastComponent(fullPath, out var parentPath, out var name))
             {
-                canonizedPath = realPathFiles[0].Key;
+                var realPathFiles = await RequestRealPathAsync(fullPath, nullOnError: true, cancellationToken).ConfigureAwait(false);
+                return CanonicalOrDefault(realPathFiles, fullPath);
             }
 
-            if (!string.IsNullOrEmpty(canonizedPath))
+            var parentRealPathFiles = await RequestRealPathAsync(parentPath, nullOnError: true, cancellationToken).ConfigureAwait(false);
+            return Combine(parentRealPathFiles, fullPath, name);
+        }
+
+        /// <summary>
+        /// Splits a path into its parent directory and last component, so that only the parent is canonicalized.
+        /// </summary>
+        /// <remarks>
+        /// SSH_FXP_REALPATH follows symbolic links. Resolving the full path would make operations on a link
+        /// (lstat, remove, rename) act on its target instead, e.g. deleting a link would delete the file it points to.
+        /// Paths whose last component is <c>.</c> or <c>..</c>, the root, and paths without a directory part
+        /// are canonicalized as a whole.
+        /// </remarks>
+        private static bool TrySplitLastComponent(string fullPath, out string parentPath, out string name)
+        {
+            parentPath = string.Empty;
+            name = string.Empty;
+
+            var trimmed = fullPath;
+            while (trimmed.Length > 1 && trimmed[trimmed.Length - 1] == '/')
             {
-                return canonizedPath;
+                trimmed = trimmed.Substring(0, trimmed.Length - 1);
             }
 
-            // Check for special cases
-            if (fullPath.EndsWith("/.", StringComparison.Ordinal) ||
-                fullPath.EndsWith("/..", StringComparison.Ordinal) ||
-                fullPath.Equals("/", StringComparison.Ordinal) ||
-#if NET
-                fullPath.IndexOf('/', StringComparison.Ordinal) < 0)
-#else
-                fullPath.IndexOf('/') < 0)
-#endif
+            var lastSlash = trimmed.LastIndexOf('/');
+            if (lastSlash < 0 || lastSlash == trimmed.Length - 1)
+            {
+                return false;
+            }
+
+            name = trimmed.Substring(lastSlash + 1);
+            if (string.Equals(name, ".", StringComparison.Ordinal) || string.Equals(name, "..", StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            parentPath = lastSlash == 0 ? "/" : trimmed.Substring(0, lastSlash);
+            return true;
+        }
+
+        private static string CanonicalOrDefault(KeyValuePair<string, SftpFileAttributes>[] realPathFiles, string defaultPath)
+        {
+            if (realPathFiles != null && !string.IsNullOrEmpty(realPathFiles[0].Key))
+            {
+                return realPathFiles[0].Key;
+            }
+
+            return defaultPath;
+        }
+
+        private static string Combine(KeyValuePair<string, SftpFileAttributes>[] parentRealPathFiles, string fullPath, string name)
+        {
+            if (parentRealPathFiles == null || string.IsNullOrEmpty(parentRealPathFiles[0].Key))
             {
                 return fullPath;
             }
 
-            var pathParts = fullPath.Split('/');
-
-#if NET
-            var partialFullPath = string.Join('/', pathParts);
-#else
-            var partialFullPath = string.Join("/", pathParts);
-#endif
-
-            if (string.IsNullOrEmpty(partialFullPath))
-            {
-                partialFullPath = "/";
-            }
-
-            realPathFiles = await RequestRealPathAsync(partialFullPath, nullOnError: true, cancellationToken).ConfigureAwait(false);
-
-            if (realPathFiles != null)
-            {
-                canonizedPath = realPathFiles[0].Key;
-            }
-
-            if (string.IsNullOrEmpty(canonizedPath))
-            {
-                return fullPath;
-            }
-
-            var slash = string.Empty;
-            if (canonizedPath[canonizedPath.Length - 1] != '/')
-            {
-                slash = "/";
-            }
-
-            return canonizedPath + slash + pathParts[pathParts.Length - 1];
+            var canonicalParent = parentRealPathFiles[0].Key;
+            var slash = canonicalParent[canonicalParent.Length - 1] == '/' ? string.Empty : "/";
+            return canonicalParent + slash + name;
         }
 
         internal string GetFullRemotePath(string path)
