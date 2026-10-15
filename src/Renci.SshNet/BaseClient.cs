@@ -23,6 +23,12 @@ namespace Renci.SshNet
 
         private readonly ILogger _logger;
         private readonly IServiceFactory _serviceFactory;
+
+        /// <summary>
+        /// The client whose connected session this client uses, or <see langword="null"/> if this client owns its session.
+        /// </summary>
+        private readonly BaseClient? _sessionOwner;
+
         private readonly object _keepAliveLock = new object();
         private TimeSpan _keepAliveInterval;
         private Timer? _keepAliveTimer;
@@ -197,6 +203,28 @@ namespace Renci.SshNet
         }
 
         /// <summary>
+        /// Initializes a new instance of the <see cref="BaseClient"/> class that uses the session of another,
+        /// already connected client instead of opening its own connection.
+        /// </summary>
+        /// <param name="sessionOwner">The client that owns the SSH session.</param>
+        /// <remarks>
+        /// Connecting this client opens its channel(s) on the session of <paramref name="sessionOwner"/>, and
+        /// disconnecting or disposing it closes only those channels: the session, its keep-alive and its
+        /// authentication stay with <paramref name="sessionOwner"/>.
+        /// </remarks>
+        private protected BaseClient(BaseClient sessionOwner)
+        {
+            ArgumentNullException.ThrowIfNull(sessionOwner);
+
+            _connectionInfo = sessionOwner.ConnectionInfo;
+            _ownsConnectionInfo = false;
+            _serviceFactory = sessionOwner.ServiceFactory;
+            _logger = (_connectionInfo.LoggerFactory ?? SshNetLoggingConfiguration.LoggerFactory).CreateLogger(GetType());
+            _keepAliveInterval = Timeout.InfiniteTimeSpan;
+            _sessionOwner = sessionOwner;
+        }
+
+        /// <summary>
         /// Connects client to the server.
         /// </summary>
         /// <exception cref="InvalidOperationException">The client is already connected.</exception>
@@ -228,6 +256,12 @@ namespace Renci.SshNet
             if (IsConnected)
             {
                 throw new InvalidOperationException("The client is already connected.");
+            }
+
+            if (_sessionOwner is not null)
+            {
+                ConnectToOwnerSession();
+                return;
             }
 
             OnConnecting();
@@ -299,6 +333,12 @@ namespace Renci.SshNet
                 throw new InvalidOperationException("The client is already connected.");
             }
 
+            if (_sessionOwner is not null)
+            {
+                ConnectToOwnerSession();
+                return;
+            }
+
             OnConnecting();
 
             // The session may already/still be connected here because e.g. in SftpClient, IsConnected also checks the internal SFTP session
@@ -352,6 +392,14 @@ namespace Renci.SshNet
 
             OnDisconnecting();
 
+            if (_sessionOwner is not null)
+            {
+                // The session belongs to the owner: only stop using it.
+                DetachOwnerSession();
+                OnDisconnected();
+                return;
+            }
+
             // stop sending keep-alive messages before we close the session
             StopKeepAliveTimer();
 
@@ -359,6 +407,40 @@ namespace Renci.SshNet
             DisposeSession();
 
             OnDisconnected();
+        }
+
+        private void ConnectToOwnerSession()
+        {
+            var session = _sessionOwner!.Session;
+            if (session is null || !session.IsConnected)
+            {
+                throw new SshConnectionException("The client that owns the session is not connected.");
+            }
+
+            OnConnecting();
+
+            session.ErrorOccured += Session_ErrorOccurred;
+            Session = session;
+
+            try
+            {
+                OnConnected();
+            }
+            catch
+            {
+                DetachOwnerSession();
+                throw;
+            }
+        }
+
+        private void DetachOwnerSession()
+        {
+            var session = Session;
+            if (session is not null)
+            {
+                session.ErrorOccured -= Session_ErrorOccurred;
+                Session = null;
+            }
         }
 
         /// <summary>

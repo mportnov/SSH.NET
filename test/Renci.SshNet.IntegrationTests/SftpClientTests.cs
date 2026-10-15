@@ -1,4 +1,4 @@
-using Renci.SshNet.Common;
+﻿using Renci.SshNet.Common;
 
 namespace Renci.SshNet.IntegrationTests
 {
@@ -270,6 +270,59 @@ namespace Renci.SshNet.IntegrationTests
 
             Assert.AreEqual("/home", _sftpClient.Get("..").FullName);
             Assert.AreEqual("/home/sshnet", _sftpClient.Get("/home/sshnet/").FullName);
+        }
+
+        [TestMethod]
+        public void SftpClient_on_SshClient_session_shares_the_connection()
+        {
+            using var sshClient = new SshClient(SshServerHostName, SshServerPort, User.UserName, User.Password);
+            sshClient.Connect();
+
+            using (var sftpClient = new SftpClient(sshClient))
+            {
+                sftpClient.Connect();
+                Assert.IsTrue(sftpClient.IsConnected);
+                Assert.IsTrue(sftpClient.Exists("/home/sshnet"));
+
+                // Shell commands and SFTP requests use the same connection.
+                Assert.AreEqual("ok", sshClient.RunCommand("echo ok").Result.Trim());
+                Assert.IsTrue(sftpClient.ListDirectory("/home/sshnet").Any());
+
+                sftpClient.Disconnect();
+                Assert.IsFalse(sftpClient.IsConnected);
+                Assert.IsTrue(sshClient.IsConnected);
+
+                // The borrowed session can be used again.
+                sftpClient.Connect();
+                Assert.IsTrue(sftpClient.Exists("/home/sshnet"));
+            }
+
+            // Disposing the SFTP client leaves the connection open.
+            Assert.IsTrue(sshClient.IsConnected);
+            Assert.AreEqual("still", sshClient.RunCommand("echo still").Result.Trim());
+        }
+
+        [TestMethod]
+        public async Task SftpClient_on_SshClient_session_connects_async_and_follows_owner_disconnect()
+        {
+            using var sshClient = new SshClient(SshServerHostName, SshServerPort, User.UserName, User.Password);
+            await sshClient.ConnectAsync(CancellationToken.None).ConfigureAwait(false);
+
+            using var sftpClient = new SftpClient(sshClient);
+            await sftpClient.ConnectAsync(CancellationToken.None).ConfigureAwait(false);
+            Assert.IsTrue(await sftpClient.ExistsAsync("/home/sshnet").ConfigureAwait(false));
+
+            sshClient.Disconnect();
+            Assert.IsFalse(sftpClient.IsConnected);
+        }
+
+        [TestMethod]
+        public void SftpClient_on_SshClient_session_requires_connected_owner()
+        {
+            using var sshClient = new SshClient(SshServerHostName, SshServerPort, User.UserName, User.Password);
+            using var sftpClient = new SftpClient(sshClient);
+
+            Assert.ThrowsExactly<SshConnectionException>(sftpClient.Connect);
         }
     }
 }
