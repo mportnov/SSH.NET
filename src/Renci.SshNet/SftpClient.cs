@@ -264,6 +264,29 @@ namespace Renci.SshNet
         }
 
         /// <summary>
+        /// Initializes a new instance of the <see cref="SftpClient"/> class that opens its SFTP channel on the
+        /// connection of an existing <see cref="SshClient"/> instead of opening a new connection.
+        /// </summary>
+        /// <param name="sshClient">The connected client whose session is used.</param>
+        /// <remarks>
+        /// <para>
+        /// No second authentication takes place, which matters for servers with interactive (e.g. two-factor)
+        /// authentication. <see cref="BaseClient.Connect"/> must be called after <paramref name="sshClient"/> has connected.
+        /// </para>
+        /// <para>
+        /// Disconnecting or disposing this client closes only the SFTP channel. The connection, its keep-alive interval
+        /// and its lifetime are controlled by <paramref name="sshClient"/>.
+        /// </para>
+        /// </remarks>
+        /// <exception cref="ArgumentNullException"><paramref name="sshClient"/> is <see langword="null"/>.</exception>
+        public SftpClient(SshClient sshClient)
+            : base(sshClient)
+        {
+            _operationTimeout = Timeout.Infinite;
+            _bufferSize = 1024 * 32;
+        }
+
+        /// <summary>
         /// Initializes a new instance of the <see cref="SftpClient"/> class.
         /// </summary>
         /// <param name="connectionInfo">The connection info.</param>
