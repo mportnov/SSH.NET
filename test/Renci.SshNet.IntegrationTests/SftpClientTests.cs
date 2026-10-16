@@ -64,6 +64,55 @@ namespace Renci.SshNet.IntegrationTests
         }
 
         [TestMethod]
+        public async Task UploadFileAsync_at_offset_resumes_without_truncating()
+        {
+            var testFilePath = "/home/sshnet/sshnet-upload-offset.bin";
+            var content = new byte[300_000];
+            new Random(42).NextBytes(content);
+            const int split = 123_457;
+
+            using (var head = new MemoryStream(content, 0, split))
+            {
+                await _sftpClient.UploadFileAsync(head, testFilePath).ConfigureAwait(false);
+            }
+
+            ulong lastReported = 0;
+            var progress = new Progress<UploadFileProgressReport>(r => lastReported = r.TotalBytesUploaded);
+            using (var tail = new MemoryStream(content, split, content.Length - split))
+            {
+                await _sftpClient.UploadFileAsync(tail, testFilePath, split, progress).ConfigureAwait(false);
+            }
+
+            using var result = new MemoryStream();
+            await _sftpClient.DownloadFileAsync(testFilePath, result).ConfigureAwait(false);
+            await _sftpClient.DeleteFileAsync(testFilePath, CancellationToken.None).ConfigureAwait(false);
+
+            CollectionAssert.AreEqual(content, result.ToArray());
+            Assert.IsTrue(lastReported <= (ulong)content.Length);
+        }
+
+        [TestMethod]
+        public async Task UploadFileAsync_at_offset_zero_truncates()
+        {
+            var testFilePath = "/home/sshnet/sshnet-upload-offset-zero.txt";
+
+            using (var longer = new MemoryStream(Encoding.UTF8.GetBytes("a longer original content")))
+            {
+                await _sftpClient.UploadFileAsync(longer, testFilePath).ConfigureAwait(false);
+            }
+
+            using (var shorter = new MemoryStream(Encoding.UTF8.GetBytes("short")))
+            {
+                await _sftpClient.UploadFileAsync(shorter, testFilePath, 0).ConfigureAwait(false);
+            }
+
+            var text = _sftpClient.ReadAllText(testFilePath);
+            await _sftpClient.DeleteFileAsync(testFilePath, CancellationToken.None).ConfigureAwait(false);
+
+            Assert.AreEqual("short", text);
+        }
+
+        [TestMethod]
         public async Task Create_directory_with_contents_and_list_it_async()
         {
             var testDirectory = "/home/sshnet/sshnet-test";

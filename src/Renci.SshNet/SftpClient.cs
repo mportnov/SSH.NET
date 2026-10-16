@@ -1173,6 +1173,47 @@ namespace Renci.SshNet
         }
 
         /// <summary>
+        /// Asynchronously writes the contents of the stream into the remote file, starting at
+        /// <paramref name="remoteOffset"/> in the remote file. The remote file is created if it
+        /// does not exist and is not truncated, which allows resuming an interrupted upload.
+        /// </summary>
+        /// <param name="input">Data input stream, positioned at the data to be written at <paramref name="remoteOffset"/>.</param>
+        /// <param name="path">Remote file path.</param>
+        /// <param name="remoteOffset">The offset in the remote file at which writing starts.</param>
+        /// <param name="uploadProgress">The upload progress; the reported total includes <paramref name="remoteOffset"/>.</param>
+        /// <param name="cancellationToken">The <see cref="CancellationToken"/> to observe.</param>
+        /// <returns>A <see cref="Task"/> that represents the asynchronous upload operation.</returns>
+        /// <exception cref="ArgumentNullException"><paramref name="input" /> is <see langword="null"/>.</exception>
+        /// <exception cref="ArgumentException"><paramref name="path" /> is <see langword="null"/> or contains only whitespace characters.</exception>
+        /// <exception cref="SshConnectionException">Client is not connected.</exception>
+        /// <exception cref="SftpPermissionDeniedException">Permission to perform the operation was denied by the remote host.</exception>
+        /// <exception cref="SshException">A SSH error where <see cref="Exception.Message" /> is the message from the remote host.</exception>
+        /// <exception cref="ObjectDisposedException">The method was called after the client was disposed.</exception>
+        public Task UploadFileAsync(Stream input, string path, ulong remoteOffset, IProgress<UploadFileProgressReport>? uploadProgress = null, CancellationToken cancellationToken = default)
+        {
+            ArgumentNullException.ThrowIfNull(input);
+            ArgumentException.ThrowIfNullOrWhiteSpace(path);
+            CheckDisposed();
+
+            var flags = Flags.Write | Flags.CreateNewOrOpen;
+
+            if (remoteOffset == 0)
+            {
+                flags |= Flags.Truncate;
+            }
+
+            return InternalUploadFile(
+                input,
+                path,
+                flags,
+                asyncResult: null,
+                uploadProgress,
+                isAsync: true,
+                cancellationToken,
+                remoteOffset);
+        }
+
+        /// <summary>
         /// Begins an asynchronous uploading the stream into remote file.
         /// </summary>
         /// <param name="input">Data input stream.</param>
@@ -2479,7 +2520,8 @@ namespace Renci.SshNet
             SftpUploadAsyncResult? asyncResult,
             IProgress<UploadFileProgressReport>? uploadProgress,
             bool isAsync,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            ulong remoteOffset = 0)
         {
             Debug.Assert(isAsync || cancellationToken == default);
 
@@ -2502,7 +2544,7 @@ namespace Renci.SshNet
                 handle = _sftpSession.RequestOpen(fullPath, flags);
             }
 
-            ulong offset = 0;
+            var offset = remoteOffset;
 
             // create buffer of optimal length
             var dataCapacity = (int)_sftpSession.CalculateOptimalWriteLength(_bufferSize, handle);
